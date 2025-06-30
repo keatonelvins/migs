@@ -1,7 +1,6 @@
 include LICENSE
 include README.md
 include pyproject.toml
-include setup.cfg
 
 # Include the source code
 recursive-include src *.py

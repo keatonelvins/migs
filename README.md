@@ -97,3 +97,10 @@ migs down my-dev-vm
 ## SSH Config
 
 The tool automatically updates your `~/.ssh/config` file with entries for your VMs, making them accessible in VS Code Remote Explorer.
+
+# Release Instructions
+```bash
+python3 -m build
+twine upload --repository testpypi dist/* # test
+twine upload dist/*
+```
