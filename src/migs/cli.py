@@ -21,8 +21,8 @@ def cli():
     pass
 
 
-@cli.command()
-def list():
+@cli.command(name='list')
+def list_migs():
     """List all MIGs in the current project"""
     try:
         migs = gcloud.list_migs()

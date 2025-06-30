@@ -188,6 +188,7 @@ class GCloudWrapper:
         ]
         
         if extra_args:
+            cmd.append("--")
             cmd.extend(extra_args)
         
         subprocess.run(cmd)
