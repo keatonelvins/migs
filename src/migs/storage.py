@@ -23,7 +23,7 @@ class VMStorage:
         """Load VM data from storage"""
         try:
             return json.loads(self.storage_file.read_text())
-        except:
+        except (json.JSONDecodeError, FileNotFoundError, PermissionError):
             return {}
     
     def _save_data(self, data: Dict):

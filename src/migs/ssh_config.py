@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 
 class SSHConfigManager:
@@ -24,7 +24,7 @@ class SSHConfigManager:
         """Read the current SSH config"""
         try:
             return self.ssh_config_path.read_text()
-        except:
+        except (FileNotFoundError, PermissionError):
             return ""
     
     def _write_config(self, content: str):
@@ -32,7 +32,7 @@ class SSHConfigManager:
         self.ssh_config_path.write_text(content)
         os.chmod(self.ssh_config_path, 0o600)
     
-    def _get_managed_section(self, config: str) -> tuple[int, int]:
+    def _get_managed_section(self, config: str) -> Tuple[int, int]:
         """Find the managed section in the config"""
         lines = config.split("\n")
         start_idx = -1
@@ -82,6 +82,8 @@ Host {host_name}
                 line = managed_entries[i]
                 if line.strip().startswith("Host ") and host_name in line:
                     host_found = True
+                    # Skip this host entry and all its config lines
+                    i += 1
                     while i < len(managed_entries) and not managed_entries[i].strip().startswith("Host "):
                         i += 1
                     continue

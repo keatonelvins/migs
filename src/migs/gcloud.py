@@ -1,7 +1,8 @@
 import json
+import os
 import subprocess
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 
 class AuthenticationError(Exception):
@@ -12,7 +13,7 @@ class AuthenticationError(Exception):
 class GCloudWrapper:
     """Wrapper for gcloud CLI commands"""
     
-    def _run_command(self, cmd: List[str], json_output: bool = True):
+    def _run_command(self, cmd: List[str], json_output: bool = True) -> Optional[Union[Dict, List, str]]:
         """Run a gcloud command and return the output"""
         if json_output and "--format" not in cmd:
             cmd.extend(["--format", "json"])
@@ -92,7 +93,7 @@ class GCloudWrapper:
         
         return request_id
     
-    def wait_for_vm(self, mig_name: str, zone: str, request_id: str, timeout: int = 300) -> Optional[Dict]:
+    def wait_for_vm(self, mig_name: str, zone: str, request_id: str, timeout: int = 300, progress_callback=None) -> Optional[Dict]:
         """Wait for a VM to be created and return its info"""
         start_time = time.time()
         
@@ -110,6 +111,9 @@ class GCloudWrapper:
                 if instances:
                     newest = max(instances, key=lambda x: x.get("creationTimestamp", ""))
                     return self.get_instance_details(newest["instance"].split("/")[-1], zone)
+            
+            if progress_callback:
+                progress_callback()
             
             time.sleep(5)
         
@@ -176,12 +180,15 @@ class GCloudWrapper:
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0
     
-    def ssh_to_vm(self, instance_name: str, zone: str):
+    def ssh_to_vm(self, instance_name: str, zone: str, extra_args: Optional[List[str]] = None):
         """SSH into a VM using gcloud"""
         cmd = [
             "gcloud", "compute", "ssh", instance_name,
             f"--zone={zone}"
         ]
+        
+        if extra_args:
+            cmd.extend(extra_args)
         
         subprocess.run(cmd)
     
@@ -201,4 +208,64 @@ class GCloudWrapper:
         ]
         
         result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.returncode == 0
+    
+    def scp_from_vm(self, remote_path: str, instance_name: str, zone: str, local_path: Optional[str] = None) -> bool:
+        """Download files from a VM using gcloud scp"""
+        source = f"{instance_name}:{remote_path}"
+        
+        if not local_path:
+            local_path = "."
+        
+        cmd = [
+            "gcloud", "compute", "scp",
+            "--recurse",
+            source,
+            local_path,
+            f"--zone={zone}"
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.returncode == 0
+    
+    def check_ssh_connectivity(self, instance_name: str, zone: str) -> bool:
+        """Check if SSH connectivity is available to a VM"""
+        cmd = [
+            "gcloud", "compute", "ssh", instance_name,
+            f"--zone={zone}",
+            "--command", "echo 'Connection successful'"
+        ]
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            return result.returncode == 0 and "Connection successful" in result.stdout
+        except subprocess.TimeoutExpired:
+            return False
+    
+    def run_script(self, script_path: str, instance_name: str, zone: str, session_name: str) -> bool:
+        """Upload and run a script on a VM in a tmux session"""
+        script_name = os.path.basename(script_path)
+        
+        # First upload the script
+        remote_script = f"/tmp/{script_name}"
+        upload_cmd = [
+            "gcloud", "compute", "scp",
+            script_path,
+            f"{instance_name}:{remote_script}",
+            f"--zone={zone}"
+        ]
+        
+        result = subprocess.run(upload_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            return False
+        
+        # Make script executable and run in tmux
+        run_cmd = [
+            "gcloud", "compute", "ssh", instance_name,
+            f"--zone={zone}",
+            "--command",
+            f"chmod +x {remote_script} && tmux new-session -d -s {session_name} {remote_script}"
+        ]
+        
+        result = subprocess.run(run_cmd, capture_output=True, text=True)
         return result.returncode == 0

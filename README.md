@@ -32,6 +32,7 @@ migs list
 ### Spin up a VM
 ```bash
 migs up my-mig --name my-dev-vm
+migs up my-mig --name my-dev-vm --async  # Don't wait for creation
 ```
 
 ### List your VMs
@@ -39,15 +40,38 @@ migs up my-mig --name my-dev-vm
 migs vms
 ```
 
+### Sync VM state
+```bash
+migs sync  # Sync local VM list with GCP state
+```
+
+### Check VM connectivity
+```bash
+migs check my-dev-vm  # Test SSH connectivity
+```
+
 ### SSH into a VM
 ```bash
 migs ssh my-dev-vm
+migs ssh my-dev-vm -- tmux attach  # Pass additional SSH arguments
+```
+
+### Run scripts
+```bash
+migs run my-dev-vm ./setup.sh  # Runs in tmux session
+migs run my-dev-vm ./deploy.sh --session deploy  # Custom session name
 ```
 
 ### Upload files
 ```bash
 migs upload my-dev-vm ./myfile.txt
 migs upload my-dev-vm ./mydir/ /home/user/
+```
+
+### Download files
+```bash
+migs download my-dev-vm /remote/file.txt
+migs download my-dev-vm /remote/dir/ ./local/
 ```
 
 ### Spin down a VM
