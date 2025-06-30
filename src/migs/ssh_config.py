@@ -59,8 +59,6 @@ Host {host_name}
     User {vm_info["username"]}
     HostName {vm_info["external_ip"]}
     IdentityFile ~/.ssh/google_compute_engine
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
 """
         
         config = self._read_config()

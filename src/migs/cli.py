@@ -178,7 +178,13 @@ def ssh(vm_name, ssh_args):
             console.print(f"[red]VM '{vm_name}' not found[/red]")
             return
         
-        gcloud.ssh_to_vm(vm_data["instance_name"], vm_data["zone"], list(ssh_args) or None)
+        # Check for .env file in current directory
+        env_file = None
+        if os.path.exists(".env"):
+            env_file = ".env"
+            console.print(f"[cyan]Found .env file, will upload and source it[/cyan]")
+        
+        gcloud.ssh_to_vm(vm_data["instance_name"], vm_data["zone"], list(ssh_args) or None, env_file)
         
     except AuthenticationError as e:
         console.print(f"[red]Authentication required[/red]")
@@ -426,9 +432,13 @@ def check(vm_name):
 @cli.command()
 @click.argument("vm-name")
 @click.argument("script-path")
+@click.argument("script-args", nargs=-1, required=False)
 @click.option("--session", default=None, help="Tmux session name (defaults to script name)")
-def run(vm_name, script_path, session):
-    """Execute a bash script on a VM in a tmux session"""
+def run(vm_name, script_path, script_args, session):
+    """Execute a bash script on a VM in a tmux session
+
+    Can pass args, e.g. `migs run my-vm script.sh arg1 arg2 arg3`
+    """
     
     try:
         vm_data = storage.get_vm(vm_name)
@@ -443,13 +453,21 @@ def run(vm_name, script_path, session):
         script_name = os.path.basename(script_path)
         session_name = session or re.sub(r'[^a-zA-Z0-9_-]', '_', script_name)
         
+        # Check for .env file in current directory
+        env_file = None
+        if os.path.exists(".env"):
+            env_file = ".env"
+            console.print(f"[cyan]Found .env file, will upload and source it[/cyan]")
+        
         console.print(f"[cyan]Running {script_name} on {vm_name} in tmux session '{session_name}'...[/cyan]")
         
         success = gcloud.run_script(
             script_path,
             vm_data["instance_name"],
             vm_data["zone"],
-            session_name
+            session_name,
+            list(script_args),
+            env_file
         )
         
         if success:

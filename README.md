@@ -63,7 +63,19 @@ migs ssh my-dev-vm -- tmux attach  # Pass additional SSH arguments
 ```bash
 migs run my-dev-vm ./setup.sh  # Runs in tmux session
 migs run my-dev-vm ./deploy.sh --session deploy  # Custom session name
+migs run my-dev-vm ./script.sh arg1 arg2  # Pass arguments to script
 ```
+
+### Environment Variables (.env files)
+Both `ssh` and `run` commands automatically detect and use `.env` files from your current directory:
+
+```bash
+# If .env exists in current directory, it will be uploaded and sourced
+migs ssh my-dev-vm  # Variables from .env available in shell
+migs run my-dev-vm ./app.sh  # Script runs with .env variables
+```
+
+The `.env` file is uploaded to `/tmp/.env` on the VM and sourced using `set -a; source /tmp/.env; set +a` to export all variables.
 
 ### Upload files
 ```bash

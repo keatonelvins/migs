@@ -182,14 +182,25 @@ class GCloudWrapper:
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0
     
-    def ssh_to_vm(self, instance_name: str, zone: str, extra_args: Optional[List[str]] = None):
+    def ssh_to_vm(self, instance_name: str, zone: str, extra_args: Optional[List[str]] = None, env_file: Optional[str] = None):
         """SSH into a VM using gcloud"""
+        # Upload .env file if provided
+        self._upload_env_file(env_file, instance_name, zone)
+        
         cmd = [
             "gcloud", "compute", "ssh", instance_name,
             f"--zone={zone}"
         ]
         
-        if extra_args:
+        # If we have an env file, modify the command to source it in the shell
+        if env_file and not extra_args:
+            # Create a command that sources the env file and then starts an interactive bash shell
+            cmd.extend([
+                "--",
+                "bash", "-c",
+                "if [ -f /tmp/.env ]; then set -a; source /tmp/.env; set +a; fi; exec bash -l"
+            ])
+        elif extra_args:
             cmd.append("--")
             cmd.extend(extra_args)
         
@@ -198,6 +209,9 @@ class GCloudWrapper:
     def scp_to_vm(self, local_path: str, instance_name: str, zone: str, remote_path: Optional[str] = None) -> bool:
         """Upload files to a VM using gcloud scp"""
         if remote_path:
+            # If remote_path doesn't start with / or ~, make it relative to home
+            if not remote_path.startswith(('/', '~')):
+                remote_path = f"~/{remote_path}"
             target = f"{instance_name}:{remote_path}"
         else:
             target = f"{instance_name}:~/"
@@ -211,10 +225,15 @@ class GCloudWrapper:
         ]
         
         result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0 and result.stderr:
+            print(f"Upload error: {result.stderr}")
         return result.returncode == 0
     
     def scp_from_vm(self, remote_path: str, instance_name: str, zone: str, local_path: Optional[str] = None) -> bool:
         """Download files from a VM using gcloud scp"""
+        # If remote_path doesn't start with / or ~, make it relative to home
+        if not remote_path.startswith(('/', '~')):
+            remote_path = f"~/{remote_path}"
         source = f"{instance_name}:{remote_path}"
         
         if not local_path:
@@ -229,6 +248,8 @@ class GCloudWrapper:
         ]
         
         result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0 and result.stderr:
+            print(f"Download error: {result.stderr}")
         return result.returncode == 0
     
     def check_ssh_connectivity(self, instance_name: str, zone: str) -> bool:
@@ -245,7 +266,23 @@ class GCloudWrapper:
         except subprocess.TimeoutExpired:
             return False
     
-    def run_script(self, script_path: str, instance_name: str, zone: str, session_name: str) -> bool:
+    def _upload_env_file(self, env_file: Optional[str], instance_name: str, zone: str) -> bool:
+        """Upload .env file to VM if provided"""
+        if not env_file:
+            return True
+            
+        cmd = [
+            "gcloud", "compute", "scp",
+            env_file,
+            f"{instance_name}:/tmp/.env",
+            f"--zone={zone}"
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Warning: Failed to upload .env file")
+        return result.returncode == 0
+    
+    def run_script(self, script_path: str, instance_name: str, zone: str, session_name: str, script_args: Optional[List[str]] = None, env_file: Optional[str] = None) -> bool:
         """Upload and run a script on a VM in a tmux session"""
         script_name = os.path.basename(script_path)
         
@@ -262,12 +299,28 @@ class GCloudWrapper:
         if result.returncode != 0:
             return False
         
+        # Upload .env file if provided
+        self._upload_env_file(env_file, instance_name, zone)
+        
+        # Build the command with arguments
+        cmd_with_args = remote_script
+        if script_args:
+            # Properly escape arguments for shell
+            escaped_args = ' '.join(f"'{arg}'" for arg in script_args)
+            cmd_with_args = f"{remote_script} {escaped_args}"
+        
+        # Build the full command with optional env sourcing
+        if env_file:
+            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} bash -c 'set -a; source /tmp/.env; set +a; {cmd_with_args}'"
+        else:
+            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} {cmd_with_args}"
+        
         # Make script executable and run in tmux
         run_cmd = [
             "gcloud", "compute", "ssh", instance_name,
             f"--zone={zone}",
             "--command",
-            f"chmod +x {remote_script} && tmux new-session -d -s {session_name} {remote_script}"
+            full_command
         ]
         
         result = subprocess.run(run_cmd, capture_output=True, text=True)
