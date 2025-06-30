@@ -154,16 +154,13 @@ class GCloudWrapper:
                     external_ip = config["natIP"]
                     break
         
-        metadata = result.get("metadata", {})
-        ssh_keys = ""
-        for item in metadata.get("items", []):
-            if item.get("key") == "ssh-keys":
-                ssh_keys = item.get("value", "")
-                break
-        
-        username = None
-        if ssh_keys:
-            username = ssh_keys.split(":")[0].strip()
+        # Get the current username using whoami
+        # This matches what gcloud compute ssh uses by default
+        try:
+            username_result = subprocess.run(["whoami"], capture_output=True, text=True, check=True)
+            username = username_result.stdout.strip()
+        except subprocess.CalledProcessError:
+            raise RuntimeError("Failed to determine username. The 'whoami' command failed.")
         
         return {
             "name": instance_name,

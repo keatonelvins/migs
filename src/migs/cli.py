@@ -223,7 +223,7 @@ def upload(vm_name, local_path, remote_path):
 
 
 @cli.command()
-@click.option("--discover", is_flag=True, help="Discover and claim untracked VMs")
+@click.option("--discover", "-d", is_flag=True, help="Discover and claim untracked VMs")
 def sync(discover):
     """Sync local VM list with actual GCP state"""
     try:
