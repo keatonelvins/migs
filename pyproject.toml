@@ -9,10 +9,7 @@ description = "CLI tool for managing Google Cloud Managed Instance Groups"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"},
-]
-maintainers = [
-    {name = "Your Name", email = "your.email@example.com"},
+    {name = "Keaton Elvins"},
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -37,10 +34,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/migs"
-Documentation = "https://github.com/yourusername/migs#readme"
-Repository = "https://github.com/yourusername/migs.git"
-Issues = "https://github.com/yourusername/migs/issues"
+Homepage = "https://github.com/keatonelvins/migs"
+Documentation = "https://github.com/keatonelvins/migs#readme"
+Repository = "https://github.com/keatonelvins/migs.git"
+Issues = "https://github.com/keatonelvins/migs/issues"
 
 [project.scripts]
 migs = "migs.cli:cli"
