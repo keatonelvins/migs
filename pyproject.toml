@@ -7,14 +7,13 @@ name = "migs"
 version = "0.1.0"
 description = "CLI tool for managing Google Cloud Managed Instance Groups"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "Keaton Elvins", email = "keatone@gmail.com"},
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
