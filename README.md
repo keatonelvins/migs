@@ -33,6 +33,8 @@ migs list
 ```bash
 migs up my-mig --name my-dev-vm
 migs up my-mig --name my-dev-vm --async  # Don't wait for creation
+migs up my-mig --name my-dev-vm -d 2h  # Auto-delete after 2 hours
+migs up my-mig --name my-dev-vm --duration=2h  # Alternative syntax
 ```
 
 ### List your VMs
@@ -43,6 +45,7 @@ migs vms
 ### Sync VM state
 ```bash
 migs sync  # Sync local VM list with GCP state
+migs sync --discover  # Also discover and claim untracked VMs
 ```
 
 ### Check VM connectivity

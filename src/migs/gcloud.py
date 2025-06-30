@@ -52,8 +52,8 @@ class GCloudWrapper:
             migs.append({
                 "name": mig["name"],
                 "zone": zone,
-                "size": mig.get("size", 0),
-                "targetSize": mig.get("targetSize", 0)
+                "size": int(mig.get("size", 0)),
+                "targetSize": int(mig.get("targetSize", 0))
             })
         
         return migs
@@ -66,7 +66,7 @@ class GCloudWrapper:
                 return mig["zone"]
         raise ValueError(f"MIG '{mig_name}' not found")
     
-    def create_resize_request(self, mig_name: str, zone: str, count: int) -> str:
+    def create_resize_request(self, mig_name: str, zone: str, count: int, run_duration: Optional[str] = None) -> str:
         """Create a resize request to add instances"""
         request_id = f"migs-resize-{int(time.time())}"
         
@@ -77,6 +77,9 @@ class GCloudWrapper:
             f"--resize-by={count}",
             f"--zone={zone}"
         ]
+        
+        if run_duration:
+            cmd.append(f"--requested-run-duration={run_duration}")
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -109,8 +112,10 @@ class GCloudWrapper:
             if result and result.get("state") == "SUCCEEDED":
                 instances = self.list_instances(mig_name, zone)
                 if instances:
-                    newest = max(instances, key=lambda x: x.get("creationTimestamp", ""))
-                    return self.get_instance_details(newest["instance"].split("/")[-1], zone)
+                    # Use instance ID as a proxy for creation order (higher ID = newer)
+                    newest = max(instances, key=lambda x: int(x.get("id", "0")))
+                    # Use the 'name' field directly instead of parsing 'instance' URL
+                    return self.get_instance_details(newest["name"], zone)
             
             if progress_callback:
                 progress_callback()

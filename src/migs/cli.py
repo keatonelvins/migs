@@ -54,10 +54,11 @@ def list_migs():
 
 @cli.command()
 @click.argument("mig-name")
-@click.option("--name", help="Custom name for your VM")
-@click.option("--zone", help="Zone (will auto-detect if not specified)")
-@click.option("--async", "async_mode", is_flag=True, help="Don't wait for VM creation to complete")
-def up(mig_name, name, zone, async_mode):
+@click.option("--name", "-n", help="Custom name for your VM")
+@click.option("--zone", "-z", help="Zone (will auto-detect if not specified)")
+@click.option("--async", "-a", "async_mode", is_flag=True, help="Don't wait for VM creation to complete")
+@click.option("--duration", "-d", help="Time before auto-deletion (e.g., 30m, 2h, 1d)")
+def up(mig_name, name, zone, async_mode, duration):
     """Spin up a new VM in the specified MIG"""
     try:
         if not zone:
@@ -67,7 +68,9 @@ def up(mig_name, name, zone, async_mode):
                 return
         
         console.print(f"[cyan]Creating resize request for MIG: {mig_name}[/cyan]")
-        request_id = gcloud.create_resize_request(mig_name, zone, 1)
+        if duration:
+            console.print(f"[yellow]VM will auto-delete after: {duration}[/yellow]")
+        request_id = gcloud.create_resize_request(mig_name, zone, 1, run_duration=duration)
         
         console.print(f"[green]Resize request created: {request_id}[/green]")
         
@@ -220,45 +223,118 @@ def upload(vm_name, local_path, remote_path):
 
 
 @cli.command()
-def sync():
+@click.option("--discover", is_flag=True, help="Discover and claim untracked VMs")
+def sync(discover):
     """Sync local VM list with actual GCP state"""
     try:
         console.print("[cyan]Syncing VM state with GCP...[/cyan]")
         
+        # First, sync existing tracked VMs
         vms = storage.list_vms()
-        if not vms:
-            console.print("[yellow]No VMs to sync[/yellow]")
-            return
+        tracked_instances = {vm["instance_name"] for vm in vms}
         
-        table = Table(title="VM Sync Status")
-        table.add_column("Name", style="cyan")
-        table.add_column("Instance", style="green") 
-        table.add_column("Status", style="yellow")
-        table.add_column("Action", style="blue")
-        
-        for vm in vms:
-            instance_info = gcloud.get_instance_details(vm["instance_name"], vm["zone"])
+        if vms:
+            table = Table(title="Tracked VMs Sync Status")
+            table.add_column("Name", style="cyan")
+            table.add_column("Instance", style="green") 
+            table.add_column("Status", style="yellow")
+            table.add_column("Action", style="blue")
             
-            if not instance_info:
-                storage.remove_vm(vm["display_name"])
-                ssh_manager.remove_vm_from_config(vm["display_name"])
-                table.add_row(
-                    vm["display_name"],
-                    vm["instance_name"],
-                    "NOT FOUND",
-                    "Removed from local storage"
-                )
-            else:
-                ssh_manager.add_vm_to_config(instance_info, custom_name=vm["display_name"])
-                table.add_row(
-                    vm["display_name"],
-                    vm["instance_name"],
-                    instance_info["status"],
-                    "Updated" if instance_info.get("external_ip") else "No external IP"
-                )
+            for vm in vms:
+                instance_info = gcloud.get_instance_details(vm["instance_name"], vm["zone"])
+                
+                if not instance_info:
+                    storage.remove_vm(vm["display_name"])
+                    ssh_manager.remove_vm_from_config(vm["display_name"])
+                    table.add_row(
+                        vm["display_name"],
+                        vm["instance_name"],
+                        "NOT FOUND",
+                        "Removed from local storage"
+                    )
+                else:
+                    ssh_manager.add_vm_to_config(instance_info, custom_name=vm["display_name"])
+                    table.add_row(
+                        vm["display_name"],
+                        vm["instance_name"],
+                        instance_info["status"],
+                        "Updated" if instance_info.get("external_ip") else "No external IP"
+                    )
+            
+            console.print(table)
+        else:
+            console.print("[yellow]No tracked VMs found[/yellow]")
         
-        console.print(table)
-        console.print("[green]✓ Sync complete[/green]")
+        # Discover untracked VMs if requested
+        if discover:
+            console.print("\n[cyan]Discovering untracked VMs...[/cyan]")
+            migs = gcloud.list_migs()
+            untracked_vms = []
+            
+            for mig in migs:
+                if mig["size"] > 0:
+                    instances = gcloud.list_instances(mig["name"], mig["zone"])
+                    for instance in instances:
+                        instance_name = instance.get("name", instance.get("instance", "").split("/")[-1])
+                        if instance_name and instance_name not in tracked_instances:
+                            instance_details = gcloud.get_instance_details(instance_name, mig["zone"])
+                            if instance_details:
+                                untracked_vms.append({
+                                    "instance_name": instance_name,
+                                    "mig_name": mig["name"],
+                                    "zone": mig["zone"],
+                                    "status": instance_details["status"],
+                                    "external_ip": instance_details.get("external_ip", "N/A")
+                                })
+            
+            if untracked_vms:
+                table = Table(title="Untracked VMs Found")
+                table.add_column("#", style="dim")
+                table.add_column("Instance", style="green")
+                table.add_column("MIG", style="yellow")
+                table.add_column("Zone", style="yellow")
+                table.add_column("Status", style="cyan")
+                table.add_column("External IP", style="blue")
+                
+                for idx, vm in enumerate(untracked_vms):
+                    table.add_row(
+                        str(idx + 1),
+                        vm["instance_name"],
+                        vm["mig_name"],
+                        vm["zone"],
+                        vm["status"],
+                        vm["external_ip"]
+                    )
+                
+                console.print(table)
+                
+                # Ask if user wants to claim any VMs
+                if click.confirm("\nWould you like to claim any of these VMs?"):
+                    vm_numbers = click.prompt("Enter VM numbers to claim (comma-separated, e.g., 1,3)", type=str)
+                    
+                    for num_str in vm_numbers.split(","):
+                        try:
+                            idx = int(num_str.strip()) - 1
+                            if 0 <= idx < len(untracked_vms):
+                                vm = untracked_vms[idx]
+                                custom_name = click.prompt(f"Custom name for {vm['instance_name']} (press Enter to skip)", default="", show_default=False)
+                                custom_name = custom_name.strip() or None
+                                
+                                # Get full instance details for SSH config
+                                instance_info = gcloud.get_instance_details(vm["instance_name"], vm["zone"])
+                                if instance_info:
+                                    storage.save_vm(vm["instance_name"], vm["mig_name"], vm["zone"], custom_name=custom_name)
+                                    ssh_manager.add_vm_to_config(instance_info, custom_name=custom_name)
+                                    display_name = custom_name or vm["instance_name"]
+                                    console.print(f"[green]✓ Claimed VM: {display_name}[/green]")
+                            else:
+                                console.print(f"[red]Invalid VM number: {num_str}[/red]")
+                        except ValueError:
+                            console.print(f"[red]Invalid input: {num_str}[/red]")
+            else:
+                console.print("[green]No untracked VMs found[/green]")
+        
+        console.print("\n[green]✓ Sync complete[/green]")
         
     except AuthenticationError as e:
         console.print(f"[red]Authentication required[/red]")
