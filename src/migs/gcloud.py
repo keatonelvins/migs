@@ -197,8 +197,7 @@ class GCloudWrapper:
             # Create a command that sources the env file and then starts an interactive bash shell
             cmd.extend([
                 "--",
-                "bash", "-c",
-                "set -a; source /tmp/.env; set +a; exec bash -l"
+                "if [ -f /tmp/.env ]; then set -a; source /tmp/.env; set +a; fi; exec bash -l"
             ])
         elif extra_args:
             cmd.append("--")

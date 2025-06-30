@@ -99,9 +99,15 @@ migs down my-dev-vm
 The tool automatically updates your `~/.ssh/config` file with entries for your VMs, making them accessible in VS Code Remote Explorer.
 
 # Release Instructions
+- Test
 ```bash
 python3 -m build
-twine upload --repository testpypi dist/* # test
+twine upload --repository testpypi dist/* # may take a second to index
+pip uninstall migs
+pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple migs
+```
+- Deploy
+```bash
 twine upload dist/*
 git tag v0.1.x
 git push origin v0.1.x
