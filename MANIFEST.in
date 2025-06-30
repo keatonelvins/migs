@@ -1,0 +1,19 @@
+include LICENSE
+include README.md
+include pyproject.toml
+include setup.cfg
+
+# Include the source code
+recursive-include src *.py
+
+# Exclude unnecessary files
+global-exclude __pycache__
+global-exclude *.py[co]
+global-exclude .DS_Store
+global-exclude .gitignore
+global-exclude .git/*
+recursive-exclude tests *
+recursive-exclude docs *
+exclude .pre-commit-config.yaml
+exclude tox.ini
+exclude Makefile

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "migs"
+version = "0.1.0"
+description = "CLI tool for managing Google Cloud Managed Instance Groups"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+maintainers = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Utilities",
+]
+keywords = ["gcloud", "google-cloud", "mig", "managed-instance-groups", "cli"]
+requires-python = ">=3.8"
+dependencies = [
+    "click>=8.0",
+    "rich>=13.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/migs"
+Documentation = "https://github.com/yourusername/migs#readme"
+Repository = "https://github.com/yourusername/migs.git"
+Issues = "https://github.com/yourusername/migs/issues"
+
+[project.scripts]
+migs = "migs.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
