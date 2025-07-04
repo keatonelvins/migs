@@ -210,10 +210,10 @@ class GCloudWrapper:
         
         # If we have an env file, modify the command to source it in the shell
         if env_file and not extra_args:
-            # Create a command that sources the env file and then starts an interactive bash shell
+            # Create a command that sources the env file and sets up GitHub auth if GITHUB_TOKEN exists
             cmd.extend([
                 "--",
-                "if [ -f /tmp/.env ]; then set -a; source /tmp/.env; set +a; fi; exec bash -l"
+                "if [ -f /tmp/.env ]; then set -a; source /tmp/.env; set +a; if [ -n \"$GITHUB_TOKEN\" ]; then echo \"$GITHUB_TOKEN\" | gh auth login --with-token 2>/dev/null || true; fi; fi; exec bash -l"
             ])
         elif extra_args:
             cmd.append("--")
@@ -324,9 +324,9 @@ class GCloudWrapper:
             escaped_args = ' '.join(f"'{arg}'" for arg in script_args)
             cmd_with_args = f"{remote_script} {escaped_args}"
         
-        # Build the full command with optional env sourcing
+        # Build the full command with optional env sourcing and GitHub auth
         if env_file:
-            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} bash -c 'set -a; source /tmp/.env; set +a; {cmd_with_args}; exec bash'"
+            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} bash -c 'set -a; source /tmp/.env; set +a; if [ -n \"$GITHUB_TOKEN\" ]; then echo \"$GITHUB_TOKEN\" | gh auth login --with-token 2>/dev/null || true; fi; {cmd_with_args}; exec bash'"
         else:
             full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} bash -c '{cmd_with_args}; exec bash'"
         

@@ -85,7 +85,10 @@ The codebase follows a modular architecture with clear separation of concerns:
 
 4. **State Management**: Local JSON storage tracks personal VMs with periodic sync against GCP state.
 
-5. **Environment Variables**: Both `ssh` and `run` commands automatically detect and upload `.env` files from the current directory, sourcing them with `set -a; source /tmp/.env; set +a`.
+5. **Environment Variables**: Both `ssh` and `run` commands automatically detect and upload `.env` files from the current directory:
+   - Sources with `set -a; source /tmp/.env; set +a`
+   - Automatically configures GitHub CLI auth if `GITHUB_TOKEN` is present
+   - Enables seamless access to private repositories
 
 6. **Multi-Node Support**: 
    - Single resize request creates multiple VMs efficiently
@@ -103,6 +106,7 @@ The codebase follows a modular architecture with clear separation of concerns:
 - The `run` command now accepts script arguments: `migs run vm-name script.sh arg1 arg2`
 - `.env` files are uploaded to `/tmp/.env` and sourced automatically for both `ssh` and `run` commands
 - The `_upload_env_file()` helper method handles .env file uploads to avoid code duplication
+- GitHub authentication is automatically configured if `GITHUB_TOKEN` is found in `.env`
 - Multi-node clusters:
   - Created with single resize request for efficiency
   - Tracked using `group_id` in storage (format: `{mig_name}-{request_id}`)
@@ -132,4 +136,16 @@ migs run cluster1 train.py --all
 
 # Shut down entire cluster
 migs down cluster1 --all
+```
+
+### GitHub Authentication
+```bash
+# Create .env file with GitHub token
+echo "GITHUB_TOKEN=ghp_your_token_here" > .env
+
+# SSH to VM - GitHub CLI will be automatically authenticated
+migs ssh myvm
+
+# Run script that needs private repo access
+migs run myvm clone_private_repo.sh
 ```
