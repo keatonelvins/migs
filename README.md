@@ -13,6 +13,13 @@ A command-line tool that wraps the gcloud CLI to provide an easier experience fo
 ## Installation
 
 ```bash
+pip install migs
+```
+
+Or to build from source:
+```bash
+git clone https://github.com/keatonelvins/migs.git
+cd migs
 pip install -e .
 ```
 
@@ -76,6 +83,8 @@ migs run my-dev-vm ./app.sh  # Script runs with .env variables
 ```
 
 The `.env` file is uploaded to `/tmp/.env` on the VM and sourced using `set -a; source /tmp/.env; set +a` to export all variables.
+
+If `$GITHUB_TOKEN` exists in your `.env`, will also configure the gh cli.
 
 ### Upload files
 ```bash
