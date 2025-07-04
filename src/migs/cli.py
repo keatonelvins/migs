@@ -54,12 +54,13 @@ def list_migs():
 
 @cli.command()
 @click.argument("mig-name")
-@click.option("--name", "-n", help="Custom name for your VM")
+@click.option("--name", help="Custom name for your VM(s)")
+@click.option("--num", "-n", default=1, type=int, help="Number of VMs to create (default: 1)")
 @click.option("--zone", "-z", help="Zone (will auto-detect if not specified)")
 @click.option("--async", "-a", "async_mode", is_flag=True, help="Don't wait for VM creation to complete")
 @click.option("--duration", "-d", help="Time before auto-deletion (e.g., 30m, 2h, 1d)")
-def up(mig_name, name, zone, async_mode, duration):
-    """Spin up a new VM in the specified MIG"""
+def up(mig_name, name, num, zone, async_mode, duration):
+    """Spin up one or more VMs in the specified MIG"""
     try:
         if not zone:
             zone = gcloud.get_mig_zone(mig_name)
@@ -67,15 +68,15 @@ def up(mig_name, name, zone, async_mode, duration):
                 console.print(f"[red]Could not find zone for MIG: {mig_name}[/red]")
                 return
         
-        console.print(f"[cyan]Creating resize request for MIG: {mig_name}[/cyan]")
+        console.print(f"[cyan]Creating resize request for MIG: {mig_name} (count: {num})[/cyan]")
         if duration:
-            console.print(f"[yellow]VM will auto-delete after: {duration}[/yellow]")
-        request_id = gcloud.create_resize_request(mig_name, zone, 1, run_duration=duration)
+            console.print(f"[yellow]VMs will auto-delete after: {duration}[/yellow]")
+        request_id = gcloud.create_resize_request(mig_name, zone, num, run_duration=duration)
         
         console.print(f"[green]Resize request created: {request_id}[/green]")
         
         if async_mode:
-            console.print("[yellow]VM creation initiated (async mode)[/yellow]")
+            console.print(f"[yellow]VM creation initiated for {num} instance(s) (async mode)[/yellow]")
             console.print("[cyan]Check status with: migs vms[/cyan]")
             return
         
@@ -84,19 +85,43 @@ def up(mig_name, name, zone, async_mode, duration):
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
-            task = progress.add_task("[yellow]Waiting for VM creation...", total=None)
+            task = progress.add_task(f"[yellow]Waiting for {num} VM(s) creation...", total=None)
             
-            vm_info = gcloud.wait_for_vm(mig_name, zone, request_id, progress_callback=lambda: progress.advance(task))
+            vm_info = gcloud.wait_for_vm(mig_name, zone, request_id, expected_count=num, progress_callback=lambda: progress.advance(task))
         
         if vm_info:
-            storage.save_vm(vm_info["name"], mig_name, zone, custom_name=name)
-            ssh_manager.add_vm_to_config(vm_info, custom_name=name)
-            
-            display_name = name or vm_info["name"]
-            console.print(f"[green]✓ VM '{display_name}' is ready![/green]")
-            console.print(f"[cyan]SSH: migs ssh {display_name}[/cyan]")
+            # Handle single VM or multiple VMs
+            if isinstance(vm_info, list):
+                # Multiple VMs created
+                group_id = f"{mig_name}-{request_id}" if num > 1 else None
+                
+                for idx, vm in enumerate(vm_info, 1):
+                    # Generate names with numeric suffixes for multi-node
+                    if name and num > 1:
+                        vm_name = f"{name}{idx}"
+                    else:
+                        vm_name = name
+                    
+                    storage.save_vm(vm["name"], mig_name, zone, custom_name=vm_name, group_id=group_id)
+                    ssh_manager.add_vm_to_config(vm, custom_name=vm_name)
+                
+                console.print(f"[green]✓ {len(vm_info)} VMs are ready![/green]")
+                if name:
+                    console.print(f"[cyan]VMs: {name}1 - {name}{len(vm_info)}[/cyan]")
+                    console.print(f"[cyan]SSH: migs ssh {name}1 (or {name}2, {name}3, etc.)[/cyan]")
+                else:
+                    for vm in vm_info:
+                        console.print(f"[cyan]SSH: migs ssh {vm['name']}[/cyan]")
+            else:
+                # Single VM created (backward compatibility)
+                storage.save_vm(vm_info["name"], mig_name, zone, custom_name=name)
+                ssh_manager.add_vm_to_config(vm_info, custom_name=name)
+                
+                display_name = name or vm_info["name"]
+                console.print(f"[green]✓ VM '{display_name}' is ready![/green]")
+                console.print(f"[cyan]SSH: migs ssh {display_name}[/cyan]")
         else:
-            console.print("[red]Failed to create VM (timeout)[/red]")
+            console.print("[red]Failed to create VM(s) (timeout)[/red]")
             
     except AuthenticationError as e:
         console.print(f"[red]Authentication required[/red]")
@@ -108,28 +133,48 @@ def up(mig_name, name, zone, async_mode, duration):
 
 @cli.command()
 @click.argument("vm-name")
-def down(vm_name):
-    """Spin down a VM"""
+@click.option("--all", is_flag=True, help="Shut down all VMs in the group (for multi-node setups)")
+def down(vm_name, all):
+    """Spin down a VM or all VMs in a group"""
     try:
         vm_data = storage.get_vm(vm_name)
         if not vm_data:
             console.print(f"[red]VM '{vm_name}' not found in your VMs[/red]")
             return
         
-        console.print(f"[yellow]Shutting down VM: {vm_name}[/yellow]")
-        
-        success = gcloud.delete_vm(
-            vm_data["instance_name"],
-            vm_data["zone"],
-            vm_data["mig_name"]
-        )
-        
-        if success:
-            storage.remove_vm(vm_name)
-            ssh_manager.remove_vm_from_config(vm_name)
-            console.print(f"[green]✓ VM '{vm_name}' has been shut down[/green]")
+        # Determine which VMs to shut down
+        vms_to_delete = []
+        if all and vm_data.get("group_id"):
+            # Get all VMs in the group
+            group_vms = storage.get_vms_in_group(vm_data["group_id"])
+            if group_vms:
+                vms_to_delete = group_vms
+                console.print(f"[yellow]Shutting down all {len(group_vms)} VMs in the group[/yellow]")
+            else:
+                vms_to_delete = [vm_data]
         else:
-            console.print(f"[red]Failed to shut down VM[/red]")
+            vms_to_delete = [vm_data]
+            console.print(f"[yellow]Shutting down VM: {vm_name}[/yellow]")
+        
+        # Delete each VM
+        success_count = 0
+        for vm in vms_to_delete:
+            success = gcloud.delete_vm(
+                vm["instance_name"],
+                vm["zone"],
+                vm["mig_name"]
+            )
+            
+            if success:
+                success_count += 1
+                storage.remove_vm(vm["display_name"])
+                ssh_manager.remove_vm_from_config(vm["display_name"])
+                console.print(f"[green]✓ VM '{vm['display_name']}' has been shut down[/green]")
+            else:
+                console.print(f"[red]Failed to shut down VM '{vm['display_name']}'[/red]")
+        
+        if len(vms_to_delete) > 1:
+            console.print(f"[cyan]Successfully shut down {success_count}/{len(vms_to_delete)} VMs[/cyan]")
             
     except AuthenticationError as e:
         console.print(f"[red]Authentication required[/red]")
@@ -148,19 +193,50 @@ def vms():
         console.print("[yellow]No personal VMs found[/yellow]")
         return
     
+    # Group VMs by group_id
+    grouped_vms = {}
+    standalone_vms = []
+    
+    for vm in vms:
+        group_id = vm.get("group_id")
+        if group_id:
+            if group_id not in grouped_vms:
+                grouped_vms[group_id] = []
+            grouped_vms[group_id].append(vm)
+        else:
+            standalone_vms.append(vm)
+    
     table = Table(title="Your VMs")
     table.add_column("Name", style="cyan")
     table.add_column("Instance", style="green")
     table.add_column("MIG", style="yellow")
     table.add_column("Zone", style="yellow")
+    table.add_column("Group", style="magenta")
     table.add_column("Created", style="blue")
     
-    for vm in vms:
+    # Add grouped VMs first
+    for group_id, group_vms in grouped_vms.items():
+        # Sort VMs in group by name
+        group_vms.sort(key=lambda x: x["display_name"])
+        for idx, vm in enumerate(group_vms):
+            group_label = f"Group ({len(group_vms)} nodes)" if idx == 0 else "↑"
+            table.add_row(
+                vm["display_name"],
+                vm["instance_name"],
+                vm["mig_name"],
+                vm["zone"],
+                group_label,
+                vm["created_at"]
+            )
+    
+    # Add standalone VMs
+    for vm in standalone_vms:
         table.add_row(
             vm["display_name"],
             vm["instance_name"],
             vm["mig_name"],
             vm["zone"],
+            "-",
             vm["created_at"]
         )
     
@@ -434,10 +510,13 @@ def check(vm_name):
 @click.argument("script-path")
 @click.argument("script-args", nargs=-1, required=False)
 @click.option("--session", default=None, help="Tmux session name (defaults to script name)")
-def run(vm_name, script_path, script_args, session):
+@click.option("--all", is_flag=True, help="Run on all VMs in the group (for multi-node setups)")
+def run(vm_name, script_path, script_args, session, all):
     """Execute a bash script on a VM in a tmux session
 
     Can pass args, e.g. `migs run my-vm script.sh arg1 arg2 arg3`
+    
+    For multi-node setups, use --all to run on all nodes in the group.
     """
     
     try:
@@ -451,7 +530,6 @@ def run(vm_name, script_path, script_args, session):
             return
         
         script_name = os.path.basename(script_path)
-        session_name = session or re.sub(r'[^a-zA-Z0-9_-]', '_', script_name)
         
         # Check for .env file in current directory
         env_file = None
@@ -459,23 +537,52 @@ def run(vm_name, script_path, script_args, session):
             env_file = ".env"
             console.print(f"[cyan]Found .env file, will upload and source it[/cyan]")
         
-        console.print(f"[cyan]Running {script_name} on {vm_name} in tmux session '{session_name}'...[/cyan]")
-        
-        success = gcloud.run_script(
-            script_path,
-            vm_data["instance_name"],
-            vm_data["zone"],
-            session_name,
-            list(script_args),
-            env_file
-        )
-        
-        if success:
-            console.print(f"[green]✓ Script started in tmux session '{session_name}'[/green]")
-            console.print(f"[cyan]To attach: migs ssh {vm_name} -- tmux attach -t {session_name}[/cyan]")
-            console.print(f"[cyan]To check status: migs ssh {vm_name} -- tmux ls[/cyan]")
+        # Determine which VMs to run on
+        vms_to_run = []
+        if all and vm_data.get("group_id"):
+            # Get all VMs in the group
+            group_vms = storage.get_vms_in_group(vm_data["group_id"])
+            if group_vms:
+                vms_to_run = group_vms
+                console.print(f"[cyan]Running on all {len(group_vms)} VMs in the group[/cyan]")
+            else:
+                vms_to_run = [vm_data]
         else:
-            console.print(f"[red]Failed to run script[/red]")
+            vms_to_run = [vm_data]
+        
+        # Run script on each VM
+        success_count = 0
+        for idx, vm in enumerate(vms_to_run):
+            # Generate unique session name for each VM in multi-node
+            if len(vms_to_run) > 1:
+                vm_session = session or f"{re.sub(r'[^a-zA-Z0-9_-]', '_', script_name)}-{idx+1}"
+            else:
+                vm_session = session or re.sub(r'[^a-zA-Z0-9_-]', '_', script_name)
+            
+            console.print(f"[cyan]Running {script_name} on {vm['display_name']} in tmux session '{vm_session}'...[/cyan]")
+            
+            success = gcloud.run_script(
+                script_path,
+                vm["instance_name"],
+                vm["zone"],
+                vm_session,
+                list(script_args),
+                env_file
+            )
+            
+            if success:
+                success_count += 1
+                console.print(f"[green]✓ Script started on {vm['display_name']} in tmux session '{vm_session}'[/green]")
+            else:
+                console.print(f"[red]Failed to run script on {vm['display_name']}[/red]")
+        
+        if success_count > 0:
+            if len(vms_to_run) == 1:
+                console.print(f"[cyan]To attach: migs ssh {vm_name} -- tmux attach -t {vm_session}[/cyan]")
+                console.print(f"[cyan]To check status: migs ssh {vm_name} -- tmux ls[/cyan]")
+            else:
+                console.print(f"[cyan]Scripts started on {success_count}/{len(vms_to_run)} VMs[/cyan]")
+                console.print(f"[cyan]To attach to a specific VM: migs ssh <vm-name> -- tmux attach -t <session-name>[/cyan]")
             
     except AuthenticationError as e:
         console.print(f"[red]Authentication required[/red]")

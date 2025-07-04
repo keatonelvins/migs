@@ -30,7 +30,7 @@ class VMStorage:
         """Save VM data to storage"""
         self.storage_file.write_text(json.dumps(data, indent=2))
     
-    def save_vm(self, instance_name: str, mig_name: str, zone: str, custom_name: Optional[str] = None):
+    def save_vm(self, instance_name: str, mig_name: str, zone: str, custom_name: Optional[str] = None, group_id: Optional[str] = None):
         """Save a VM to personal storage"""
         data = self._load_data()
         
@@ -41,7 +41,8 @@ class VMStorage:
             "mig_name": mig_name,
             "zone": zone,
             "display_name": display_name,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "group_id": group_id
         }
         
         self._save_data(data)
@@ -77,3 +78,13 @@ class VMStorage:
         """List all personal VMs"""
         data = self._load_data()
         return list(data.values())
+    
+    def get_vms_in_group(self, group_id: str) -> List[Dict]:
+        """Get all VMs in a specific group"""
+        data = self._load_data()
+        return [vm for vm in data.values() if vm.get("group_id") == group_id]
+    
+    def get_vm_group_id(self, vm_name: str) -> Optional[str]:
+        """Get the group ID for a VM if it's part of a group"""
+        vm_data = self.get_vm(vm_name)
+        return vm_data.get("group_id") if vm_data else None

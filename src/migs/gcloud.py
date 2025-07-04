@@ -96,9 +96,13 @@ class GCloudWrapper:
         
         return request_id
     
-    def wait_for_vm(self, mig_name: str, zone: str, request_id: str, timeout: int = 300, progress_callback=None) -> Optional[Dict]:
-        """Wait for a VM to be created and return its info"""
+    def wait_for_vm(self, mig_name: str, zone: str, request_id: str, expected_count: int = 1, timeout: int = 300, progress_callback=None) -> Optional[Union[Dict, List[Dict]]]:
+        """Wait for VM(s) to be created and return their info"""
         start_time = time.time()
+        
+        # Get the list of instances before the resize request
+        initial_instances = self.list_instances(mig_name, zone)
+        initial_instance_names = {inst["name"] for inst in initial_instances}
         
         while time.time() - start_time < timeout:
             cmd = [
@@ -110,12 +114,24 @@ class GCloudWrapper:
             
             result = self._run_command(cmd)
             if result and result.get("state") == "SUCCEEDED":
-                instances = self.list_instances(mig_name, zone)
-                if instances:
-                    # Use instance ID as a proxy for creation order (higher ID = newer)
-                    newest = max(instances, key=lambda x: int(x.get("id", "0")))
-                    # Use the 'name' field directly instead of parsing 'instance' URL
-                    return self.get_instance_details(newest["name"], zone)
+                # Get current instances and find the new ones
+                current_instances = self.list_instances(mig_name, zone)
+                new_instances = [inst for inst in current_instances if inst["name"] not in initial_instance_names]
+                
+                if len(new_instances) >= expected_count:
+                    # Sort by instance ID to get consistent ordering
+                    new_instances.sort(key=lambda x: int(x.get("id", "0")))
+                    # Get details for all new instances
+                    instance_details = []
+                    for inst in new_instances[:expected_count]:
+                        details = self.get_instance_details(inst["name"], zone)
+                        if details:
+                            instance_details.append(details)
+                    
+                    # Return single instance for backward compatibility when expected_count=1
+                    if expected_count == 1 and instance_details:
+                        return instance_details[0]
+                    return instance_details
             
             if progress_callback:
                 progress_callback()
@@ -310,9 +326,9 @@ class GCloudWrapper:
         
         # Build the full command with optional env sourcing
         if env_file:
-            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} bash -c 'set -a; source /tmp/.env; set +a; {cmd_with_args}'"
+            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} bash -c 'set -a; source /tmp/.env; set +a; {cmd_with_args}; exec bash'"
         else:
-            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} {cmd_with_args}"
+            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} bash -c '{cmd_with_args}; exec bash'"
         
         # Make script executable and run in tmux
         run_cmd = [
