@@ -24,14 +24,12 @@ make install-tools
 # Build distribution packages
 make build
 
-# Run tests (currently no tests configured)
-make test
-
 # Clean build artifacts
 make clean
 ```
 
 ### Release Process
+First increment the `pyproject.toml` and `src/migs/__init__.py`
 ```bash
 # Test upload to PyPI
 make test-upload
@@ -79,7 +77,7 @@ The codebase follows a modular architecture with clear separation of concerns:
 
 1. **Error Handling**: All gcloud operations include authentication error handling with automatic prompts for re-authentication.
 
-2. **Async Operations**: The `up` command supports `--async` flag for non-blocking VM creation.
+2. **Long-Running Operations**: VM creation waits up to 15 minutes (single VM) or 30 minutes (multi-node) for completion.
 
 3. **Rich Output**: Uses Rich library for formatted tables and progress indicators.
 
@@ -125,7 +123,7 @@ migs down myvm
 ### Multi-Node Cluster
 ```bash
 # Create 4-node cluster
-migs up my-mig --name cluster -n 4
+migs up my-mig --name cluster -c 4
 
 # SSH to specific nodes
 migs ssh cluster1

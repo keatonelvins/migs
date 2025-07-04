@@ -54,12 +54,11 @@ def list_migs():
 
 @cli.command()
 @click.argument("mig-name")
-@click.option("--name", help="Custom name for your VM(s)")
-@click.option("--num", "-n", default=1, type=int, help="Number of VMs to create (default: 1)")
+@click.option("--name", "-n", help="Custom name for your VM(s)")
+@click.option("--count", "-c", default=1, type=int, help="Number of VMs to create (default: 1)")
 @click.option("--zone", "-z", help="Zone (will auto-detect if not specified)")
-@click.option("--async", "-a", "async_mode", is_flag=True, help="Don't wait for VM creation to complete")
 @click.option("--duration", "-d", help="Time before auto-deletion (e.g., 30m, 2h, 1d)")
-def up(mig_name, name, num, zone, async_mode, duration):
+def up(mig_name, name, count, zone, duration):
     """Spin up one or more VMs in the specified MIG"""
     try:
         if not zone:
@@ -68,36 +67,31 @@ def up(mig_name, name, num, zone, async_mode, duration):
                 console.print(f"[red]Could not find zone for MIG: {mig_name}[/red]")
                 return
         
-        console.print(f"[cyan]Creating resize request for MIG: {mig_name} (count: {num})[/cyan]")
+        console.print(f"[cyan]Creating resize request for MIG: {mig_name} (count: {count})[/cyan]")
         if duration:
             console.print(f"[yellow]VMs will auto-delete after: {duration}[/yellow]")
-        request_id = gcloud.create_resize_request(mig_name, zone, num, run_duration=duration)
+        request_id = gcloud.create_resize_request(mig_name, zone, count, run_duration=duration)
         
         console.print(f"[green]Resize request created: {request_id}[/green]")
-        
-        if async_mode:
-            console.print(f"[yellow]VM creation initiated for {num} instance(s) (async mode)[/yellow]")
-            console.print("[cyan]Check status with: migs vms[/cyan]")
-            return
         
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
-            task = progress.add_task(f"[yellow]Waiting for {num} VM(s) creation...", total=None)
+            task = progress.add_task(f"[yellow]Waiting for {count} VM(s) creation...", total=None)
             
-            vm_info = gcloud.wait_for_vm(mig_name, zone, request_id, expected_count=num, progress_callback=lambda: progress.advance(task))
+            vm_info = gcloud.wait_for_vm(mig_name, zone, request_id, expected_count=count, progress_callback=lambda: progress.advance(task))
         
         if vm_info:
             # Handle single VM or multiple VMs
             if isinstance(vm_info, list):
                 # Multiple VMs created
-                group_id = f"{mig_name}-{request_id}" if num > 1 else None
+                group_id = f"{mig_name}-{request_id}" if count > 1 else None
                 
                 for idx, vm in enumerate(vm_info, 1):
                     # Generate names with numeric suffixes for multi-node
-                    if name and num > 1:
+                    if name and count > 1:
                         vm_name = f"{name}{idx}"
                     else:
                         vm_name = name

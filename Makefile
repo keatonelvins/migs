@@ -30,13 +30,13 @@ test-upload: build
 	@echo "Uploading to Test PyPI..."
 	@echo "Username: __token__"
 	@echo "Password: Use your Test PyPI token"
-	twine upload --repository testpypi dist/*
+	twine upload --repository testpypi dist/* --verbose
 
 upload: build
 	@echo "Uploading to Production PyPI..."
 	@echo "Username: __token__"
 	@echo "Password: Use your Production PyPI token"
-	twine upload dist/*
+	twine upload dist/* --verbose
 
 release: clean build
 	@echo "Ready to release version $$(python -c 'import src.migs; print(src.migs.__version__)')"

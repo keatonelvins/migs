@@ -31,10 +31,10 @@ migs list
 
 ### Spin up a VM
 ```bash
-migs up my-mig --name my-dev-vm
-migs up my-mig --name my-dev-vm --async  # Don't wait for creation
-migs up my-mig --name my-dev-vm -d 2h  # Auto-delete after 2 hours
-migs up my-mig --name my-dev-vm --duration=2h  # Alternative syntax
+migs up my-mig -n my-dev-vm
+migs up my-mig -n my-dev-vm -d 2h  # Auto-delete after 2 hours
+migs up my-mig -n my-dev-vm --duration=2h  # Alternative syntax
+migs up 
 ```
 
 ### List your VMs
@@ -92,6 +92,22 @@ migs download my-dev-vm /remote/dir/ ./local/
 ### Spin down a VM
 ```bash
 migs down my-dev-vm
+```
+
+### Multi-Node Cluster
+```bash
+# Create 4-node cluster
+migs up my-mig --name cluster -c 4
+
+# SSH to specific nodes
+migs ssh cluster1
+migs ssh cluster2
+
+# Run script on all nodes
+migs run cluster1 train.py --all
+
+# Shut down entire cluster
+migs down cluster1 --all
 ```
 
 ## SSH Config

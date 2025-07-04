@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "migs"
-version = "0.1.3"
+version = "0.1.4"
 description = "CLI tool for managing Google Cloud Managed Instance Groups"
 readme = "README.md"
 license = "MIT"
