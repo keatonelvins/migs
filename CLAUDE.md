@@ -56,7 +56,14 @@ The codebase follows a modular architecture with clear separation of concerns:
 - **gcloud.py**: Wrapper around gcloud CLI commands. Key functions:
   - `list_migs()`: Lists all MIGs in the project
   - `create_resize_request()`: Creates new VM instances via resize requests
+    - Auto-detects gcloud beta availability for smart API selection
+    - Uses gcloud beta API with `--instances` parameter for exact naming when available
+    - Falls back to stable API with `--resize-by` when beta unavailable or `--stable` flag used
+    - Supports custom instance names via `instance_names` parameter
+    - Returns tuple of (request_id, used_beta) to inform downstream logic
   - `wait_for_vm()`: Waits for VMs and returns their details (supports multiple VMs)
+    - Can wait for specific named instances when using beta API
+    - Maintains backward compatibility for stable API
   - `delete_vm()`: Removes VM instances
   - `get_instance_details()`: Retrieves VM details including external IP
   - Authentication handling with automatic prompt for login
@@ -110,6 +117,7 @@ The codebase follows a modular architecture with clear separation of concerns:
   - Tracked using `group_id` in storage (format: `{mig_name}-{request_id}`)
   - VM naming: base name + numeric suffix (myvm1, myvm2, etc.)
   - Group operations supported via `--all` flag
+  - Can use cluster name directly with `--all` commands (e.g., `migs down cluster --all` instead of `migs down cluster1 --all`)
 
 ## Usage Examples
 
@@ -122,18 +130,35 @@ migs down myvm
 
 ### Multi-Node Cluster
 ```bash
-# Create 4-node cluster
+# Create 4-node cluster with custom names
 migs up my-mig --name cluster -c 4
 
 # SSH to specific nodes
 migs ssh cluster1
 migs ssh cluster2
 
-# Run script on all nodes
-migs run cluster1 train.py --all
+# Run script on all nodes (use cluster name directly)
+migs run cluster train.py --all
 
-# Shut down entire cluster
-migs down cluster1 --all
+# Upload files to all nodes
+migs upload cluster data.tar.gz --all
+
+# Shut down entire cluster (use cluster name directly)
+migs down cluster --all
+```
+
+### VM Naming
+```bash
+# With custom name (auto-detects gcloud beta)
+migs up my-mig --name myvm          # Creates VM named "myvm" if beta available
+migs up my-mig --name node -c 3     # Creates VMs named "node1", "node2", "node3"
+
+# Without custom name (auto-generated)
+migs up my-mig                      # Creates VM named "my-mig-username-timestamp"
+migs up my-mig -c 2                 # Creates VMs with auto-generated names
+
+# Force stable API (bypass auto-detection)
+migs up my-mig --name myvm --stable # Use stable API (VM gets random name, mapped locally)
 ```
 
 ### GitHub Authentication

@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import click
 from rich.console import Console
 from rich.table import Table
@@ -54,12 +55,20 @@ def list_migs():
 
 @cli.command()
 @click.argument("mig-name")
-@click.option("--name", "-n", help="Custom name for your VM(s)")
+@click.option("--name", "-n", help="Custom name for your VM(s). With count>1, creates name1, name2, etc.")
 @click.option("--count", "-c", default=1, type=int, help="Number of VMs to create (default: 1)")
 @click.option("--zone", "-z", help="Zone (will auto-detect if not specified)")
 @click.option("--duration", "-d", help="Time before auto-deletion (e.g., 30m, 2h, 1d)")
-def up(mig_name, name, count, zone, duration):
-    """Spin up one or more VMs in the specified MIG"""
+@click.option("--stable", is_flag=True, help="Use stable API (no exact instance naming)")
+def up(mig_name, name, count, zone, duration, stable):
+    """Spin up one or more VMs in the specified MIG
+    
+    By default, auto-detects if gcloud beta is available and uses it for exact
+    instance names. Without --name, generates names as: mig-username-timestamp
+    With --name and --count>1, creates: name1, name2, name3, etc.
+    
+    Use --stable to force stable API with local name mapping.
+    """
     try:
         if not zone:
             zone = gcloud.get_mig_zone(mig_name)
@@ -67,10 +76,48 @@ def up(mig_name, name, count, zone, duration):
                 console.print(f"[red]Could not find zone for MIG: {mig_name}[/red]")
                 return
         
+        # Get initial instances before creating resize request (for multi-node detection)
+        initial_instances = gcloud.list_instances(mig_name, zone)
+        initial_instance_names = {inst["name"] for inst in initial_instances}
+        
+        # Determine if we should use stable API
+        use_stable = stable
+        
+        # Generate instance names
+        instance_names = None
+        if name:
+            # User provided a name
+            if count > 1:
+                instance_names = [f"{name}{i}" for i in range(1, count + 1)]
+            else:
+                instance_names = [name]
+        else:
+            # Generate default names: <mig_name>_<username>_<id>
+            import os
+            username = os.getenv("USER", "user")
+            timestamp = int(time.time())
+            if count > 1:
+                instance_names = [f"{mig_name}-{username}-{timestamp}-{i}" for i in range(1, count + 1)]
+            else:
+                instance_names = [f"{mig_name}-{username}-{timestamp}"]
+        
         console.print(f"[cyan]Creating resize request for MIG: {mig_name} (count: {count})[/cyan]")
         if duration:
             console.print(f"[yellow]VMs will auto-delete after: {duration}[/yellow]")
-        request_id = gcloud.create_resize_request(mig_name, zone, count, run_duration=duration)
+        
+        request_id, used_beta = gcloud.create_resize_request(
+            mig_name, zone, count, 
+            run_duration=duration, 
+            instance_names=instance_names, 
+            force_mode="stable" if use_stable else None
+        )
+        
+        if instance_names and used_beta:
+            console.print(f"[cyan]Using gcloud beta - Instance names: {', '.join(instance_names)}[/cyan]")
+        elif instance_names and not used_beta:
+            if not use_stable:
+                console.print(f"[yellow]Note: gcloud beta not available, try installing or avoid this messages with --stable[/yellow]")
+            console.print(f"[cyan]Using stable API - VMs will be mapped to: {', '.join(instance_names)}[/cyan]")
         
         console.print(f"[green]Resize request created: {request_id}[/green]")
         
@@ -81,7 +128,10 @@ def up(mig_name, name, count, zone, duration):
         ) as progress:
             task = progress.add_task(f"[yellow]Waiting for {count} VM(s) creation...", total=None)
             
-            vm_info = gcloud.wait_for_vm(mig_name, zone, request_id, expected_count=count, progress_callback=lambda: progress.advance(task))
+            vm_info = gcloud.wait_for_vm(mig_name, zone, request_id, expected_count=count, 
+                                          progress_callback=lambda: progress.advance(task),
+                                          initial_instance_names=initial_instance_names,
+                                          target_instance_names=instance_names)
         
         if vm_info:
             # Handle single VM or multiple VMs
@@ -90,17 +140,26 @@ def up(mig_name, name, count, zone, duration):
                 group_id = f"{mig_name}-{request_id}" if count > 1 else None
                 
                 for idx, vm in enumerate(vm_info, 1):
-                    # Generate names with numeric suffixes for multi-node
-                    if name and count > 1:
+                    # When using beta API with instance names, the VM already has the correct name
+                    # When using stable API, we need to map custom names
+                    if instance_names and used_beta:
+                        # VM name is already what we specified
+                        vm_name = vm["name"]
+                    elif name and count > 1:
+                        # Stable API: map to user's custom name with suffix
                         vm_name = f"{name}{idx}"
                     else:
-                        vm_name = name
+                        vm_name = name or vm["name"]
                     
                     storage.save_vm(vm["name"], mig_name, zone, custom_name=vm_name, group_id=group_id)
                     ssh_manager.add_vm_to_config(vm, custom_name=vm_name)
                 
                 console.print(f"[green]✓ {len(vm_info)} VMs are ready![/green]")
-                if name:
+                if instance_names and used_beta:
+                    console.print(f"[cyan]VMs created: {', '.join([vm['name'] for vm in vm_info])}[/cyan]")
+                    for vm in vm_info:
+                        console.print(f"[cyan]SSH: migs ssh {vm['name']}[/cyan]")
+                elif name:
                     console.print(f"[cyan]VMs: {name}1 - {name}{len(vm_info)}[/cyan]")
                     console.print(f"[cyan]SSH: migs ssh {name}1 (or {name}2, {name}3, etc.)[/cyan]")
                 else:
@@ -108,12 +167,16 @@ def up(mig_name, name, count, zone, duration):
                         console.print(f"[cyan]SSH: migs ssh {vm['name']}[/cyan]")
             else:
                 # Single VM created (backward compatibility)
-                storage.save_vm(vm_info["name"], mig_name, zone, custom_name=name)
-                ssh_manager.add_vm_to_config(vm_info, custom_name=name)
+                if instance_names and used_beta:
+                    vm_name = vm_info["name"]
+                else:
+                    vm_name = name or vm_info["name"]
+                    
+                storage.save_vm(vm_info["name"], mig_name, zone, custom_name=vm_name)
+                ssh_manager.add_vm_to_config(vm_info, custom_name=vm_name)
                 
-                display_name = name or vm_info["name"]
-                console.print(f"[green]✓ VM '{display_name}' is ready![/green]")
-                console.print(f"[cyan]SSH: migs ssh {display_name}[/cyan]")
+                console.print(f"[green]✓ VM '{vm_name}' is ready![/green]")
+                console.print(f"[cyan]SSH: migs ssh {vm_name}[/cyan]")
         else:
             console.print("[red]Failed to create VM(s) (timeout)[/red]")
             
@@ -131,22 +194,36 @@ def up(mig_name, name, count, zone, duration):
 def down(vm_name, all):
     """Spin down a VM or all VMs in a group"""
     try:
-        vm_data = storage.get_vm(vm_name)
-        if not vm_data:
-            console.print(f"[red]VM '{vm_name}' not found in your VMs[/red]")
-            return
-        
-        # Determine which VMs to shut down
-        vms_to_delete = []
-        if all and vm_data.get("group_id"):
-            # Get all VMs in the group
-            group_vms = storage.get_vms_in_group(vm_data["group_id"])
-            if group_vms:
-                vms_to_delete = group_vms
-                console.print(f"[yellow]Shutting down all {len(group_vms)} VMs in the group[/yellow]")
+        # First try to find cluster VMs if --all is specified
+        if all:
+            cluster_vms = storage.get_cluster_vms(vm_name)
+            if cluster_vms:
+                vms_to_delete = cluster_vms
+                console.print(f"[yellow]Shutting down all {len(cluster_vms)} VMs in cluster '{vm_name}'[/yellow]")
             else:
-                vms_to_delete = [vm_data]
+                # Fall back to single VM lookup
+                vm_data = storage.get_vm(vm_name)
+                if not vm_data:
+                    console.print(f"[red]VM or cluster '{vm_name}' not found[/red]")
+                    return
+                
+                if vm_data.get("group_id"):
+                    # Get all VMs in the group
+                    group_vms = storage.get_vms_in_group(vm_data["group_id"])
+                    if group_vms:
+                        vms_to_delete = group_vms
+                        console.print(f"[yellow]Shutting down all {len(group_vms)} VMs in the group[/yellow]")
+                    else:
+                        vms_to_delete = [vm_data]
+                else:
+                    vms_to_delete = [vm_data]
+                    console.print(f"[yellow]Shutting down VM: {vm_name}[/yellow]")
         else:
+            # Single VM shutdown
+            vm_data = storage.get_vm(vm_name)
+            if not vm_data:
+                console.print(f"[red]VM '{vm_name}' not found[/red]")
+                return
             vms_to_delete = [vm_data]
             console.print(f"[yellow]Shutting down VM: {vm_name}[/yellow]")
         
@@ -268,27 +345,67 @@ def ssh(vm_name, ssh_args):
 @click.argument("vm-name")
 @click.argument("local-path")
 @click.argument("remote-path", required=False)
-def upload(vm_name, local_path, remote_path):
-    """Upload files or directories to a VM"""
+@click.option("--all", is_flag=True, help="Upload to all VMs in the group (for multi-node setups)")
+def upload(vm_name, local_path, remote_path, all):
+    """Upload files or directories to a VM or all VMs in a cluster"""
     try:
-        vm_data = storage.get_vm(vm_name)
-        if not vm_data:
-            console.print(f"[red]VM '{vm_name}' not found[/red]")
+        if not os.path.exists(local_path):
+            console.print(f"[red]Local path '{local_path}' not found[/red]")
             return
         
-        console.print(f"[cyan]Uploading {local_path} to {vm_name}...[/cyan]")
-        
-        success = gcloud.scp_to_vm(
-            local_path,
-            vm_data["instance_name"],
-            vm_data["zone"],
-            remote_path
-        )
-        
-        if success:
-            console.print(f"[green]✓ Upload complete[/green]")
+        # Determine which VMs to upload to
+        vms_to_upload = []
+        if all:
+            # First try to find cluster VMs
+            cluster_vms = storage.get_cluster_vms(vm_name)
+            if cluster_vms:
+                vms_to_upload = cluster_vms
+                console.print(f"[cyan]Uploading to all {len(cluster_vms)} VMs in cluster '{vm_name}'[/cyan]")
+            else:
+                # Fall back to single VM lookup
+                vm_data = storage.get_vm(vm_name)
+                if not vm_data:
+                    console.print(f"[red]VM or cluster '{vm_name}' not found[/red]")
+                    return
+                
+                if vm_data.get("group_id"):
+                    # Get all VMs in the group
+                    group_vms = storage.get_vms_in_group(vm_data["group_id"])
+                    if group_vms:
+                        vms_to_upload = group_vms
+                        console.print(f"[cyan]Uploading to all {len(group_vms)} VMs in the group[/cyan]")
+                    else:
+                        vms_to_upload = [vm_data]
+                else:
+                    vms_to_upload = [vm_data]
         else:
-            console.print(f"[red]Upload failed[/red]")
+            # Single VM upload
+            vm_data = storage.get_vm(vm_name)
+            if not vm_data:
+                console.print(f"[red]VM '{vm_name}' not found[/red]")
+                return
+            vms_to_upload = [vm_data]
+        
+        # Upload to each VM
+        success_count = 0
+        for vm in vms_to_upload:
+            console.print(f"[cyan]Uploading {local_path} to {vm['display_name']}...[/cyan]")
+            
+            success = gcloud.scp_to_vm(
+                local_path,
+                vm["instance_name"],
+                vm["zone"],
+                remote_path
+            )
+            
+            if success:
+                success_count += 1
+                console.print(f"[green]✓ Upload complete to {vm['display_name']}[/green]")
+            else:
+                console.print(f"[red]Upload failed to {vm['display_name']}[/red]")
+        
+        if len(vms_to_upload) > 1:
+            console.print(f"[cyan]Successfully uploaded to {success_count}/{len(vms_to_upload)} VMs[/cyan]")
             
     except AuthenticationError as e:
         console.print(f"[red]Authentication required[/red]")
@@ -514,11 +631,6 @@ def run(vm_name, script_path, script_args, session, all):
     """
     
     try:
-        vm_data = storage.get_vm(vm_name)
-        if not vm_data:
-            console.print(f"[red]VM '{vm_name}' not found[/red]")
-            return
-        
         if not os.path.exists(script_path):
             console.print(f"[red]Script file '{script_path}' not found[/red]")
             return
@@ -533,25 +645,42 @@ def run(vm_name, script_path, script_args, session, all):
         
         # Determine which VMs to run on
         vms_to_run = []
-        if all and vm_data.get("group_id"):
-            # Get all VMs in the group
-            group_vms = storage.get_vms_in_group(vm_data["group_id"])
-            if group_vms:
-                vms_to_run = group_vms
-                console.print(f"[cyan]Running on all {len(group_vms)} VMs in the group[/cyan]")
+        if all:
+            # First try to find cluster VMs
+            cluster_vms = storage.get_cluster_vms(vm_name)
+            if cluster_vms:
+                vms_to_run = cluster_vms
+                console.print(f"[cyan]Running on all {len(cluster_vms)} VMs in cluster '{vm_name}'[/cyan]")
             else:
-                vms_to_run = [vm_data]
+                # Fall back to single VM lookup
+                vm_data = storage.get_vm(vm_name)
+                if not vm_data:
+                    console.print(f"[red]VM or cluster '{vm_name}' not found[/red]")
+                    return
+                
+                if vm_data.get("group_id"):
+                    # Get all VMs in the group
+                    group_vms = storage.get_vms_in_group(vm_data["group_id"])
+                    if group_vms:
+                        vms_to_run = group_vms
+                        console.print(f"[cyan]Running on all {len(group_vms)} VMs in the group[/cyan]")
+                    else:
+                        vms_to_run = [vm_data]
+                else:
+                    vms_to_run = [vm_data]
         else:
+            # Single VM run
+            vm_data = storage.get_vm(vm_name)
+            if not vm_data:
+                console.print(f"[red]VM '{vm_name}' not found[/red]")
+                return
             vms_to_run = [vm_data]
         
         # Run script on each VM
         success_count = 0
         for idx, vm in enumerate(vms_to_run):
-            # Generate unique session name for each VM in multi-node
-            if len(vms_to_run) > 1:
-                vm_session = session or f"{re.sub(r'[^a-zA-Z0-9_-]', '_', script_name)}-{idx+1}"
-            else:
-                vm_session = session or re.sub(r'[^a-zA-Z0-9_-]', '_', script_name)
+            # Use the same session name for all VMs (they're on different machines)
+            vm_session = session or re.sub(r'[^a-zA-Z0-9_-]', '_', script_name)
             
             console.print(f"[cyan]Running {script_name} on {vm['display_name']} in tmux session '{vm_session}'...[/cyan]")
             
@@ -576,7 +705,7 @@ def run(vm_name, script_path, script_args, session, all):
                 console.print(f"[cyan]To check status: migs ssh {vm_name} -- tmux ls[/cyan]")
             else:
                 console.print(f"[cyan]Scripts started on {success_count}/{len(vms_to_run)} VMs[/cyan]")
-                console.print(f"[cyan]To attach to a specific VM: migs ssh <vm-name> -- tmux attach -t <session-name>[/cyan]")
+                console.print(f"[cyan]To attach to a specific VM: migs ssh <vm-name> -- tmux attach -t {vm_session}[/cyan]")
             
     except AuthenticationError as e:
         console.print(f"[red]Authentication required[/red]")

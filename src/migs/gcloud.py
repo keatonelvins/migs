@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 import time
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any
 
 
 class AuthenticationError(Exception):
@@ -13,7 +13,28 @@ class AuthenticationError(Exception):
 class GCloudWrapper:
     """Wrapper for gcloud CLI commands"""
     
-    def _run_command(self, cmd: List[str], json_output: bool = True) -> Optional[Union[Dict, List, str]]:
+    def __init__(self):
+        self._beta_available = None
+    
+    def check_beta_available(self) -> bool:
+        """Check if gcloud beta component is installed"""
+        if self._beta_available is not None:
+            return self._beta_available
+            
+        try:
+            result = subprocess.run(
+                ["gcloud", "beta", "help"], 
+                capture_output=True, 
+                text=True, 
+                timeout=5
+            )
+            self._beta_available = result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            self._beta_available = False
+            
+        return self._beta_available
+    
+    def _run_command(self, cmd: List[str], json_output: bool = True) -> Optional[Union[Dict[str, Any], List[Dict[str, Any]], str]]:
         """Run a gcloud command and return the output"""
         if json_output and "--format" not in cmd:
             cmd.extend(["--format", "json"])
@@ -49,13 +70,14 @@ class GCloudWrapper:
         migs = []
         for mig in result:
             zone = mig["zone"].split("/")[-1] if "/" in mig["zone"] else mig["zone"]
-            migs.append({
-                "name": mig["name"],
-                "zone": zone,
-                "size": int(mig.get("size", 0)),
-                "targetSize": int(mig.get("targetSize", 0))
-            })
-        
+            if not (mig["name"].startswith("gke-") and "default-pool" in mig["name"]):
+                migs.append({
+                    "name": mig["name"],
+                    "zone": zone,
+                    "size": int(mig.get("size", 0)),
+                    "targetSize": int(mig.get("targetSize", 0))
+                })
+            
         return migs
     
     def get_mig_zone(self, mig_name: str) -> Optional[str]:
@@ -66,17 +88,42 @@ class GCloudWrapper:
                 return mig["zone"]
         raise ValueError(f"MIG '{mig_name}' not found")
     
-    def create_resize_request(self, mig_name: str, zone: str, count: int, run_duration: Optional[str] = None) -> str:
-        """Create a resize request to add instances"""
+    def create_resize_request(self, mig_name: str, zone: str, count: int, run_duration: Optional[str] = None, instance_names: Optional[List[str]] = None, force_mode: Optional[str] = None) -> tuple[str, bool]:
+        """Create a resize request to add instances with optional custom names
+        
+        Returns: (request_id, used_beta)
+        """
         request_id = f"migs-resize-{int(time.time())}"
         
-        cmd = [
-            "gcloud", "compute", "instance-groups", "managed",
-            "resize-requests", "create", mig_name,
-            f"--resize-request={request_id}",
-            f"--resize-by={count}",
-            f"--zone={zone}"
-        ]
+        # Determine which API to use
+        use_beta = False
+        if instance_names:
+            if force_mode == "stable":
+                use_beta = False
+            elif force_mode == "beta":
+                use_beta = True
+            else:
+                # Auto-detect
+                use_beta = self.check_beta_available()
+        
+        if use_beta and instance_names:
+            # Use beta API with specific instance names
+            cmd = [
+                "gcloud", "beta", "compute", "instance-groups", "managed",
+                "resize-requests", "create", mig_name,
+                f"--resize-request={request_id}",
+                f"--instances={','.join(instance_names)}",
+                f"--zone={zone}"
+            ]
+        else:
+            # Use stable API with resize-by
+            cmd = [
+                "gcloud", "compute", "instance-groups", "managed",
+                "resize-requests", "create", mig_name,
+                f"--resize-request={request_id}",
+                f"--resize-by={count}",
+                f"--zone={zone}"
+            ]
         
         if run_duration:
             cmd.append(f"--requested-run-duration={run_duration}")
@@ -94,9 +141,9 @@ class GCloudWrapper:
                 raise AuthenticationError("Not authenticated. Please run: gcloud auth login")
             raise Exception(f"Failed to create resize request: {result.stderr}")
         
-        return request_id
+        return request_id, use_beta
     
-    def wait_for_vm(self, mig_name: str, zone: str, request_id: str, expected_count: int = 1, progress_callback=None) -> Optional[Union[Dict, List[Dict]]]:
+    def wait_for_vm(self, mig_name: str, zone: str, request_id: str, expected_count: int = 1, progress_callback=None, initial_instance_names=None, target_instance_names: Optional[List[str]] = None) -> Optional[Union[Dict, List[Dict]]]:
         """Wait for VM(s) to be created and return their info"""
         # Default timeout: 15 minutes for single node, 30 minutes for multi-node
         timeout = 1800 if expected_count > 1 else 900
@@ -104,8 +151,9 @@ class GCloudWrapper:
         start_time = time.time()
         
         # Get the list of instances before the resize request
-        initial_instances = self.list_instances(mig_name, zone)
-        initial_instance_names = {inst["name"] for inst in initial_instances}
+        if initial_instance_names is None:
+            initial_instances = self.list_instances(mig_name, zone)
+            initial_instance_names = {inst["name"] for inst in initial_instances}
         
         while time.time() - start_time < timeout:
             cmd = [
@@ -117,24 +165,48 @@ class GCloudWrapper:
             
             result = self._run_command(cmd)
             if result and result.get("state") == "SUCCEEDED":
-                # Get current instances and find the new ones
+                # Get current instances
                 current_instances = self.list_instances(mig_name, zone)
-                new_instances = [inst for inst in current_instances if inst["name"] not in initial_instance_names]
                 
-                if len(new_instances) >= expected_count:
-                    # Sort by instance ID to get consistent ordering
-                    new_instances.sort(key=lambda x: int(x.get("id", "0")))
-                    # Get details for all new instances
-                    instance_details = []
-                    for inst in new_instances[:expected_count]:
-                        details = self.get_instance_details(inst["name"], zone)
-                        if details:
-                            instance_details.append(details)
+                if target_instance_names:
+                    # When using beta API with specific names, look for those exact instances
+                    target_set = set(target_instance_names)
+                    found_instances = [inst for inst in current_instances if inst["name"] in target_set]
                     
-                    # Return single instance for backward compatibility when expected_count=1
-                    if expected_count == 1 and instance_details:
-                        return instance_details[0]
-                    return instance_details
+                    if len(found_instances) >= expected_count:
+                        # Sort by the order in target_instance_names to maintain user's order
+                        name_to_order = {name: i for i, name in enumerate(target_instance_names)}
+                        found_instances.sort(key=lambda x: name_to_order.get(x["name"], 999))
+                        
+                        # Get details for found instances
+                        instance_details = []
+                        for inst in found_instances[:expected_count]:
+                            details = self.get_instance_details(inst["name"], zone)
+                            if details:
+                                instance_details.append(details)
+                        
+                        # Return single instance for backward compatibility when expected_count=1
+                        if expected_count == 1 and instance_details:
+                            return instance_details[0]
+                        return instance_details
+                else:
+                    # Original behavior: find new instances not in initial set
+                    new_instances = [inst for inst in current_instances if inst["name"] not in initial_instance_names]
+                    
+                    if len(new_instances) >= expected_count:
+                        # Sort by instance ID to get consistent ordering
+                        new_instances.sort(key=lambda x: int(x.get("id", "0")))
+                        # Get details for all new instances
+                        instance_details = []
+                        for inst in new_instances[:expected_count]:
+                            details = self.get_instance_details(inst["name"], zone)
+                            if details:
+                                instance_details.append(details)
+                        
+                        # Return single instance for backward compatibility when expected_count=1
+                        if expected_count == 1 and instance_details:
+                            return instance_details[0]
+                        return instance_details
             
             if progress_callback:
                 progress_callback()

@@ -88,3 +88,29 @@ class VMStorage:
         """Get the group ID for a VM if it's part of a group"""
         vm_data = self.get_vm(vm_name)
         return vm_data.get("group_id") if vm_data else None
+    
+    def get_cluster_vms(self, cluster_name: str) -> List[Dict]:
+        """Get all VMs that match a cluster name pattern.
+        
+        For multi-node clusters created with --name cluster -c 4, this will
+        find cluster1, cluster2, cluster3, cluster4 when given 'cluster'.
+        """
+        data = self._load_data()
+        
+        # First check if there's an exact match with a group_id
+        exact_match = self.get_vm(cluster_name)
+        if exact_match and exact_match.get("group_id"):
+            # This is a VM in a group, return all VMs in that group
+            return self.get_vms_in_group(exact_match["group_id"])
+        
+        # Otherwise, look for VMs that match the cluster pattern
+        # (e.g., "cluster" matches "cluster1", "cluster2", etc.)
+        for vm_name, vm_data in data.items():
+            # Check if VM name matches cluster pattern (clusterN)
+            if vm_name.startswith(cluster_name) and vm_data.get("group_id"):
+                # Get all VMs in this group
+                group_vms = self.get_vms_in_group(vm_data["group_id"])
+                if group_vms:
+                    return group_vms
+        
+        return []

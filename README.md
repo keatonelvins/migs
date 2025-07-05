@@ -5,10 +5,11 @@ A command-line tool that wraps the gcloud CLI to provide an easier experience fo
 ## Features
 
 - List MIGs in your project
-- Spin up/down VMs with custom names
+- Spin up/down VMs with exact custom names (auto-detects gcloud beta)
 - Track your personal VMs
 - Automatic SSH config management for VS Code Remote Explorer
 - Easy file/directory uploads
+- Multi-node cluster support with coordinated naming
 
 ## Installation
 
@@ -28,6 +29,7 @@ pip install -e .
 - Python 3.8+
 - gcloud CLI installed and authenticated (`gcloud auth login`)
 - SSH keys configured for Google Compute Engine
+- (Optional) gcloud beta component for exact VM naming (`gcloud components install beta`)
 
 ## Usage
 
@@ -38,10 +40,16 @@ migs list
 
 ### Spin up a VM
 ```bash
-migs up my-mig -n my-dev-vm
-migs up my-mig -n my-dev-vm -d 2h  # Auto-delete after 2 hours
-migs up my-mig -n my-dev-vm --duration=2h  # Alternative syntax
-migs up 
+# With custom name (auto-detects gcloud beta availability)
+migs up my-mig -n my-dev-vm           # Creates VM named "my-dev-vm" if beta available
+migs up my-mig -n my-dev-vm -d 2h     # Auto-delete after 2 hours
+migs up my-mig -n node -c 3           # Creates "node1", "node2", "node3"
+
+# Without custom name (auto-generated)
+migs up my-mig                        # Creates "my-mig-username-timestamp"
+
+# Force stable API (bypass auto-detection)
+migs up my-mig -n my-dev-vm --stable  # Use stable API (VM gets random name, mapped locally)
 ```
 
 ### List your VMs
@@ -105,8 +113,8 @@ migs down my-dev-vm
 
 ### Multi-Node Cluster
 ```bash
-# Create 4-node cluster
-migs up my-mig --name cluster -c 4
+# Create 4-node cluster with coordinated names
+migs up my-mig --name cluster -c 4    # Creates cluster1, cluster2, cluster3, cluster4
 
 # SSH to specific nodes
 migs ssh cluster1
