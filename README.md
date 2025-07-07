@@ -155,16 +155,41 @@ torchrun --nproc_per_node=$NPROC_PER_NODE \
 The tool automatically updates your `~/.ssh/config` file with entries for your VMs, making them accessible in VS Code Remote Explorer.
 
 # Release Instructions
-- Test
+### Setup and Installation
 ```bash
-python3 -m build
-twine upload --repository testpypi dist/* # may take a second to index
-pip uninstall migs
-pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple migs
+# Install development dependencies and tool in editable mode
+make dev-install
+# Or directly with pip
+pip install -e .
+
+# Install packaging tools (needed for building/releasing)
+make install-tools
 ```
-- Deploy
+
+### Building and Testing
 ```bash
-twine upload dist/*
+# Build distribution packages
+make build
+
+# Clean build artifacts
+make clean
+```
+
+### Release Process
+First increment the `pyproject.toml` and `src/migs/__init__.py`
+```bash
+# Test upload to PyPI
+make test-upload
+
+# Production upload to PyPI
+make upload
+
+# Full release (clean, build, upload)
+make release
+```
+
+Add git version tag:
+```bash
 git tag v0.1.x
 git push origin v0.1.x
 ```
