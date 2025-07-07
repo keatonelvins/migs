@@ -622,12 +622,14 @@ def check(vm_name):
 @click.argument("script-args", nargs=-1, required=False)
 @click.option("--session", default=None, help="Tmux session name (defaults to script name)")
 @click.option("--all", is_flag=True, help="Run on all VMs in the group (for multi-node setups)")
-def run(vm_name, script_path, script_args, session, all):
+@click.option("--torchrun", is_flag=True, help="Set up torchrun environment variables for distributed training")
+def run(vm_name, script_path, script_args, session, all, torchrun):
     """Execute a bash script on a VM in a tmux session
 
     Can pass args, e.g. `migs run my-vm script.sh arg1 arg2 arg3`
     
     For multi-node setups, use --all to run on all nodes in the group.
+    Use --torchrun with --all to automatically set up distributed training environment.
     """
     
     try:
@@ -676,11 +678,51 @@ def run(vm_name, script_path, script_args, session, all):
                 return
             vms_to_run = [vm_data]
         
+        # Sort VMs by display name to ensure consistent ordering (important for torchrun)
+        vms_to_run.sort(key=lambda x: x["display_name"])
+        
+        # Get torchrun environment variables if needed
+        torchrun_env = None
+        if torchrun and all and len(vms_to_run) > 1:
+            console.print(f"[cyan]Setting up torchrun environment for {len(vms_to_run)} nodes...[/cyan]")
+            
+            # Get head node (first VM) internal details
+            head_vm = vms_to_run[0]
+            head_details = gcloud.get_instance_internal_details(head_vm["instance_name"], head_vm["zone"])
+            
+            if not head_details:
+                console.print(f"[red]Failed to get internal details for head node '{head_vm['display_name']}'[/red]")
+                return
+            
+            head_node_ip = head_details["internal_ip"]
+            nproc_per_node = head_details["gpu_count"]
+            nnodes = len(vms_to_run)
+            
+            console.print(f"[cyan]Head node: {head_vm['display_name']} (IP: {head_node_ip})[/cyan]")
+            console.print(f"[cyan]GPUs per node: {nproc_per_node}[/cyan]")
+            console.print(f"[cyan]Total nodes: {nnodes}[/cyan]")
+            
+            # Prepare environment for each node
+            torchrun_env = {
+                "HEAD_NODE_IP": head_node_ip,
+                "HEAD_NODE_PORT": "5000",
+                "NNODES": str(nnodes),
+                "NPROC_PER_NODE": str(nproc_per_node)
+            }
+        elif torchrun and not all:
+            console.print(f"[yellow]Warning: --torchrun is only effective when used with --all for multi-node setups[/yellow]")
+        
         # Run script on each VM
         success_count = 0
         for idx, vm in enumerate(vms_to_run):
             # Use the same session name for all VMs (they're on different machines)
             vm_session = session or re.sub(r'[^a-zA-Z0-9_-]', '_', script_name)
+            
+            # Prepare node-specific environment variables for torchrun
+            node_env = None
+            if torchrun_env:
+                node_env = torchrun_env.copy()
+                node_env["NODE_RANK"] = str(idx)  # 0 for head, 1+ for workers
             
             console.print(f"[cyan]Running {script_name} on {vm['display_name']} in tmux session '{vm_session}'...[/cyan]")
             
@@ -690,7 +732,8 @@ def run(vm_name, script_path, script_args, session, all):
                 vm["zone"],
                 vm_session,
                 list(script_args),
-                env_file
+                env_file,
+                node_env
             )
             
             if success:

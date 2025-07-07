@@ -261,6 +261,50 @@ class GCloudWrapper:
             "status": result.get("status")
         }
     
+    def get_instance_internal_details(self, instance_name: str, zone: str) -> Optional[Dict]:
+        """Get internal IP and GPU count for an instance"""
+        # First get instance details to extract internal IP
+        cmd = [
+            "gcloud", "compute", "instances", "describe",
+            instance_name,
+            f"--zone={zone}"
+        ]
+        
+        result = self._run_command(cmd)
+        if not result:
+            return None
+        
+        # Extract internal IP from network interfaces
+        internal_ip = None
+        for interface in result.get("networkInterfaces", []):
+            if interface.get("networkIP"):
+                internal_ip = interface["networkIP"]
+                break
+        
+        if not internal_ip:
+            return None
+        
+        # Get GPU count via SSH
+        gpu_cmd = [
+            "gcloud", "compute", "ssh", instance_name,
+            f"--zone={zone}",
+            "--command", "nvidia-smi -L 2>/dev/null | wc -l || echo 1"
+        ]
+        
+        try:
+            gpu_result = subprocess.run(gpu_cmd, capture_output=True, text=True, timeout=10)
+            if gpu_result.returncode == 0 and gpu_result.stdout.strip():
+                gpu_count = int(gpu_result.stdout.strip())
+            else:
+                gpu_count = 1  # Default to 1 if no GPUs or error
+        except (subprocess.TimeoutExpired, ValueError):
+            gpu_count = 1  # Default to 1 on any error
+        
+        return {
+            "internal_ip": internal_ip,
+            "gpu_count": gpu_count
+        }
+    
     def delete_vm(self, instance_name: str, zone: str, mig_name: str) -> bool:
         """Delete a VM from a MIG"""
         cmd = [
@@ -372,7 +416,7 @@ class GCloudWrapper:
             print(f"Warning: Failed to upload .env file")
         return result.returncode == 0
     
-    def run_script(self, script_path: str, instance_name: str, zone: str, session_name: str, script_args: Optional[List[str]] = None, env_file: Optional[str] = None) -> bool:
+    def run_script(self, script_path: str, instance_name: str, zone: str, session_name: str, script_args: Optional[List[str]] = None, env_file: Optional[str] = None, extra_env: Optional[Dict[str, str]] = None) -> bool:
         """Upload and run a script on a VM in a tmux session"""
         script_name = os.path.basename(script_path)
         
@@ -399,11 +443,16 @@ class GCloudWrapper:
             escaped_args = ' '.join(f"'{arg}'" for arg in script_args)
             cmd_with_args = f"{remote_script} {escaped_args}"
         
+        # Build environment exports
+        env_exports = ""
+        if extra_env:
+            env_exports = " ".join(f"export {k}={v};" for k, v in extra_env.items()) + " "
+        
         # Build the full command with optional env sourcing and GitHub auth
         if env_file:
-            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} bash -c 'set -a; source /tmp/.env; set +a; if [ -n \"$GITHUB_TOKEN\" ]; then echo \"$GITHUB_TOKEN\" | gh auth login --with-token 2>/dev/null || true; fi; {cmd_with_args}; exec bash'"
+            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} bash -c 'set -a; source /tmp/.env; set +a; if [ -n \"$GITHUB_TOKEN\" ]; then echo \"$GITHUB_TOKEN\" | gh auth login --with-token 2>/dev/null || true; fi; {env_exports}{cmd_with_args}; exec bash'"
         else:
-            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} bash -c '{cmd_with_args}; exec bash'"
+            full_command = f"chmod +x {remote_script} && tmux new-session -d -s {session_name} bash -c '{env_exports}{cmd_with_args}; exec bash'"
         
         # Make script executable and run in tmux
         run_cmd = [

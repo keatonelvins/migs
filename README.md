@@ -121,10 +121,33 @@ migs ssh cluster1
 migs ssh cluster2
 
 # Run script on all nodes
-migs run cluster1 train.py --all
+migs run cluster train.py --all
 
 # Shut down entire cluster
-migs down cluster1 --all
+migs down cluster --all
+```
+
+### Distributed Training (PyTorch)
+The `--torchrun` flag automatically sets up environment variables for distributed training:
+
+```bash
+# Run distributed training script on all nodes
+migs run cluster train.py --all --torchrun
+
+# This automatically sets on each node:
+- HEAD_NODE_IP: Internal IP of cluster1 (head node)
+- HEAD_NODE_PORT: 5000
+- NNODES: Total number of nodes
+- NODE_RANK: 0 for head, 1+ for workers
+- NPROC_PER_NODE: Auto-detected GPU count
+
+# Your script can then use torchrun:
+torchrun --nproc_per_node=$NPROC_PER_NODE \
+         --nnodes=$NNODES \
+         --node_rank=$NODE_RANK \
+         --master_addr=$HEAD_NODE_IP \
+         --master_port=$HEAD_NODE_PORT \
+         your_training_script.py
 ```
 
 ## SSH Config

@@ -147,6 +147,19 @@ migs upload cluster data.tar.gz --all
 migs down cluster --all
 ```
 
+### Distributed Training
+```bash
+# Run with torchrun support
+migs run cluster train.py --all --torchrun
+
+# Automatically sets environment variables:
+# - HEAD_NODE_IP: Internal IP of cluster1
+# - HEAD_NODE_PORT: 5000
+# - NNODES: Number of nodes
+# - NODE_RANK: Per-node rank (0=head)
+# - NPROC_PER_NODE: GPU count from head node
+```
+
 ### VM Naming
 ```bash
 # With custom name (auto-detects gcloud beta)
