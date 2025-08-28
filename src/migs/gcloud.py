@@ -245,13 +245,30 @@ class GCloudWrapper:
                     external_ip = config["natIP"]
                     break
         
-        # Get the current username using whoami
-        # This matches what gcloud compute ssh uses by default
+        # Get SSH username from email
         try:
-            username_result = subprocess.run(["whoami"], capture_output=True, text=True, check=True)
-            username = username_result.stdout.strip()
+            account_result = subprocess.run(
+                ["gcloud", "config", "get-value", "account"],
+                capture_output=True, 
+                text=True, 
+                check=True
+            )
+            account_email = account_result.stdout.strip()
+            
+            # Convert email to SSH username format
+            if account_email:
+                # Replace @ with _ and . with _
+                username = account_email.replace('@', '_').replace('.', '_')
+            else:
+                username_result = subprocess.run(["whoami"], capture_output=True, text=True, check=True)
+                username = username_result.stdout.strip()
         except subprocess.CalledProcessError:
-            raise RuntimeError("Failed to determine username. The 'whoami' command failed.")
+            # Fallback to whoami if gcloud command fails
+            try:
+                username_result = subprocess.run(["whoami"], capture_output=True, text=True, check=True)
+                username = username_result.stdout.strip()
+            except subprocess.CalledProcessError:
+                raise RuntimeError("Failed to determine username.")
         
         return {
             "name": instance_name,
