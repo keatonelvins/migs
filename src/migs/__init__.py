@@ -1,3 +1,3 @@
 """migs - CLI tool for managing Google Cloud Managed Instance Groups"""
 
-__version__ = "0.1.5"
+__version__ = "0.1.8"

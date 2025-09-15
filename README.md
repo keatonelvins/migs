@@ -181,9 +181,6 @@ First increment the `pyproject.toml` and `src/migs/__init__.py`
 # Test upload to PyPI
 make test-upload
 
-# Production upload to PyPI
-make upload
-
 # Full release (clean, build, upload)
 make release
 ```

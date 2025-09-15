@@ -144,18 +144,13 @@ class GCloudWrapper:
         return request_id, use_beta
     
     def wait_for_vm(self, mig_name: str, zone: str, request_id: str, expected_count: int = 1, progress_callback=None, initial_instance_names=None, target_instance_names: Optional[List[str]] = None) -> Optional[Union[Dict, List[Dict]]]:
-        """Wait for VM(s) to be created and return their info"""
-        # Default timeout: 15 minutes for single node, 30 minutes for multi-node
-        timeout = 1800 if expected_count > 1 else 900
-        
-        start_time = time.time()
-        
+        """Wait for VM(s) to be created and return their info"""                
         # Get the list of instances before the resize request
         if initial_instance_names is None:
             initial_instances = self.list_instances(mig_name, zone)
             initial_instance_names = {inst["name"] for inst in initial_instances}
         
-        while time.time() - start_time < timeout:
+        while True:
             cmd = [
                 "gcloud", "compute", "instance-groups", "managed",
                 "resize-requests", "describe", mig_name,
@@ -212,8 +207,6 @@ class GCloudWrapper:
                 progress_callback()
             
             time.sleep(5)
-        
-        return None
     
     def list_instances(self, mig_name: str, zone: str) -> List[Dict]:
         """List instances in a MIG"""

@@ -178,7 +178,7 @@ def up(mig_name, name, count, zone, duration, stable):
                 console.print(f"[green]✓ VM '{vm_name}' is ready![/green]")
                 console.print(f"[cyan]SSH: migs ssh {vm_name}[/cyan]")
         else:
-            console.print("[red]Failed to create VM(s) (timeout)[/red]")
+            console.print("[red]Failed to create VM(s)[/red]")
             
     except AuthenticationError as e:
         console.print(f"[red]Authentication required[/red]")
